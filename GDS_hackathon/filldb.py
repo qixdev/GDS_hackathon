@@ -1,48 +1,46 @@
-import psycopg
 from helpers.openai import send_embedding
-from config import DB_URL
-
-conn = psycopg.connect(DB_URL)
-cursor = conn.cursor()
 
 
-def store(part, embedding_description, embedding_topic, table_name='info'):
+def store(conn, name, description, address, transport_numbers, schedule, table_name='attractions'):
+    query_sql = f"""INSERT INTO {table_name} 
+    (name, name_v, description, description_v, address, transport_numbers, schedule)
+    VALUES (%s, %s, %s, %s, %s, %s, %s)"""
+    name_v = send_embedding(name)
+    description_v = send_embedding(description)
     try:
-        cursor.execute(f"""
-            INSERT INTO {table_name} (
-                category, topic, description, embedding_description, embedding_topic
-            )
-            VALUES (%s, %s, %s, %s, %s)
-        """, (
-            part['category'],
-            part['topic'],
-            part['description'],
-            embedding_description,
-            embedding_topic
-        ))
-        print(f'Successfully stored {part['topic']}')
+        cursor.execute(query_sql, (name, name_v, description, description_v, address, transport_numbers, schedule))
+        print(f'Successfully stored {name}')
         conn.commit()
     except Exception as error:
-        print(f"Error storing part '{part['topic']}': {error}")
+        print(f"Error storing {name}: {error}")
         return "ERROR"
 
 
 def main():
-    ls = list()
-    with open('asdfasdf') as f:
-        docs = ''.join(f.readlines()).split(10 * '~')
-    for part in docs:
-        part = part.strip()
-        title, desc = part.split(5 * "~")
-        title = title.strip().strip("#")
-        category, topic = (title.split(" = "))
-        ls.append({'category': category, 'topic': topic, 'description': desc})
+    try:
+        with open('info_en.txt') as f:
+            all_attractions_info_list = ''.join(f.readlines()).split("\n\n\n\n\n")
+            for particular_attraction_info_list in all_attractions_info_list:
+                attraction_info_parts = particular_attraction_info_list.split("\n")
+                some_attraction_info_plain = []
+                for part in attraction_info_parts:
+                    if not part:
+                        continue
+                    _, value = part.split("===")
+                    some_attraction_info_plain.append(value)
+                name = some_attraction_info_plain[1]
+                description = some_attraction_info_plain[2]
+                address = some_attraction_info_plain[3]
+                transport_numbers = some_attraction_info_plain[4]
+                schedule = some_attraction_info_plain[5]
+                x = store(name, description, address, transport_numbers, schedule)
+                if x == "ERROR":
+                    exit(1)
+    except Exception as e:
+        print(e)
 
-    for hmap in ls:
-        if store(hmap, send_embedding(hmap['description'].strip()),
-                 send_embedding(hmap['topic'].strip("#").strip()), table_name) == "ERROR":
-            print("error")
-            return
+
+
 
 
 if __name__ == '__main__':

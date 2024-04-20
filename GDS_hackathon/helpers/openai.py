@@ -3,6 +3,7 @@ import requests
 import tiktoken
 from config import OPENAI_API_KEY
 from datetime import datetime, UTC
+import pytz
 
 headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
 
@@ -18,8 +19,9 @@ def get_len_tokens(text) -> int:
 def get_category(prompt, history):
     system_message = {"role": "system", "content": """You are a helpful chat bot guardrail for travel agency in Kazakhstan called CityPass.
 Your primary goal is to categorize the user's message into following categories:
-    attractions - Any questions about particular attractions.
+    attraction_info - Any questions about particular attractions.
     citypass - Any questions about CityPass.
+    tour_building - Questions that ask for building a tour. This may include building a tour to get into modern life of the city, etc.
     
 If question doesn't match any category, you should politely respond to it if it has relation to travelling.
 Otherwise, politely inform user that you can only answer to the topics above.
@@ -29,7 +31,12 @@ Return your response in following JSON format:
 """}
     new_message = {"role": "user", "content": f"""User input: {prompt}"""}
 
-    messages = [system_message] + history + [new_message]
+    example_messages = [
+        {"role": "user", "content": f"""User input: Build me a tour for getting into modern life of the Astana"""},
+        {"role": "assistant", "content": """{"category": "tour_buildilng"}"""}
+    ]
+
+    messages = [system_message] + example_messages + history + [new_message]
     json_format = {
         "response_format": {"type": "json_object"},
         # "model": "gpt-4-turbo-preview",
@@ -57,14 +64,22 @@ Return your response in following JSON format:
     return {"explanation": "Sorry. There was an error processing your request."}
 
 
-def send_gpt(history, documentation, user_prompt):
+def send_gpt(history, attractions_info, user_prompt):
     print(user_prompt)
-    system_message = {"role": "system", "content": f"""
-    
-    
-    
+    system_message = {"role": "system", "content": f"""Act as an assistant from travelling agency in Kazakhstan.
+Your primary goal is to design tour paths for tourist that came to Kazakhstan based on their preferences.
+You will be provided with attractions info and you have to select those that suit the user-tourist the best relying on their messages.
+Also keep in mind the schedule of attractions. You will be provided with current time to do it.
+You should provide plan for tour, providing attractions in list with following parameters:
+    Concise description
+    Address and busses if there are
+    Price
+At the end apply full sum for the user.
+Contacts for all attractions management is following phone number: +7 (7172) 79-04-39.
     """}
-    new_message = {"role": "user", "content": f"""User input: {user_prompt}
+    new_message = {"role": "user", "content": f"""Attractions info {attractions_info}
+Current time: {get_time_tz()}
+User input: {user_prompt}
     """}
     messages = [system_message] + history + [new_message]
 
@@ -138,6 +153,11 @@ def get_endpoint(history, category_prompt, user_prompt):
 
 def get_time():
     now = datetime.now(UTC)
+    return now.strftime("%H:%M:%S on %d %B, %Y")
+
+
+def get_time_tz(tz=pytz.timezone('Asia/Almaty')):
+    now = datetime.now(tz)
     return now.strftime("%H:%M:%S on %d %B, %Y")
 
 
