@@ -1,3 +1,5 @@
+import json
+
 from helpers.openai import send_embedding
 
 
@@ -84,3 +86,17 @@ def list_all_attractions(conn):
     except Exception as e:
         print(e)
         return []
+
+
+def add_to_history(conn, user_input, response, received, responded, chat_id):
+    query_sql = f"""INSERT INTO history 
+    (user_input, bot_response, received, responded, chat_id) 
+    VALUES (%s, %s, %s, %s, %s)"""
+    try:
+        cursor = conn.cursor()
+        cursor.execute(query_sql, (user_input, json.dumps(response), received, responded, chat_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(e)
+        return False

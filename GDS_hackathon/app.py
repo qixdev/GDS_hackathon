@@ -3,14 +3,17 @@ import psycopg
 from config import DB_URL
 from helpers.logger import log, log_time
 import uuid
-from helpers.db import retrieve_history, retrieve_info, delete_attraction
+from helpers.db import retrieve_history, retrieve_info, delete_attraction, add_to_history
 from helpers.response import api_respond
-from helpers.openai import get_category, send_gpt
+from helpers.openai import get_category, send_gpt, get_summary_gpt
 from helpers.db import list_all_attractions
 from filldb import store
-
+from flask_cors import CORS
+from modules.build_path import build_path
+from helpers.display import display_data
 
 app = Flask(__name__)
+CORS(app)
 error_response = "Sorry, there was an error processing your request"
 
 
@@ -41,12 +44,16 @@ def chat():
     if request.method == "POST":
         request_json = request.get_json()
 
-        if "prompt" not in request_json.keys():
+        if "prompt" not in request_json.keys() or "location" not in request_json.keys():
             log(
                 request_json=request_json,
-                error="prompt field was not provided by request"
+                error="prompt field and location field was not provided by request"
             )
-            return api_respond(chat_id, data=error_response, cookie=set_cookie)
+            return jsonify({"error": "You should provide `prompt` and `location` fields, where `location` is the "
+                                     "object with `latitude` and `longitude`"}, 400)
+
+        if "latitude" not in request_json['location'].keys() and "longitude" not in request_json['location'].keys():
+            return jsonify({"error": "You should provide `latitude` and `longitude` in your request"})
 
         if not set_cookie:
             history = retrieve_history(conn, chat_id)
@@ -58,20 +65,40 @@ def chat():
         print(category)
         if "category" in category.keys():
             go_to = category["category"]
+
             if go_to == "tour_building":
-                limit = 5  # I think it will be changed later
+                if "limit" not in category.keys():
+                    add_to_history(conn, user_input, error_response, user_sent, log_time(), chat_id)
+                    return api_respond(chat_id, data=error_response, cookie=set_cookie)
+                limit = category["limit"]
             else:
                 limit = 2
         elif "response" in category.keys():
             response = category["response"]
+            add_to_history(conn, user_input, response, user_sent, log_time(), chat_id)
             return api_respond(chat_id, response, cookie=set_cookie)
         else:
+            add_to_history(conn, user_input, error_response, user_sent, log_time(), chat_id)
             return api_respond(chat_id, error_response, cookie=set_cookie)
 
         info = retrieve_info(conn, user_input, category=go_to, limit=limit)
         print(info)
-        response = send_gpt(history, info, user_input)
-        return api_respond(chat_id, response, cookie=set_cookie)
+        is_ok, response = send_gpt(history, info, user_input)
+        print("attractions info response", response)
+        if not is_ok:
+            print("NOT OKAY WITH JSON GENERATED")
+            pass
+            # return send_gpt(backup in case of messed up)
+        if is_ok:
+            tour_info = build_path(conn, request_json['location'], response['attractions'])
+            print("tour info", tour_info)
+            tour_locations = tour_info['tour']
+            tour_length = tour_info['tour_length']
+        text_info = display_data(conn, tour_locations, tour_length)
+        gpt_summary = get_summary_gpt(conn, tour_locations, user_input)
+        total_response = f"""{gpt_summary}\n\n{text_info}"""
+        add_to_history(conn, user_input, total_response, user_sent, log_time(), chat_id)
+        return api_respond(chat_id, total_response, cookie=set_cookie)
 
 
 @app.post('/add')

@@ -1,4 +1,6 @@
 import json
+from json import JSONDecodeError
+
 import requests
 import tiktoken
 from config import OPENAI_API_KEY
@@ -23,11 +25,13 @@ Your primary goal is to categorize the user's message into following categories:
     citypass - Any questions about CityPass.
     tour_building - Questions that ask for building a tour. This may include building a tour to get into modern life of the city, etc.
     
-If question doesn't match any category, you should politely respond to it if it has relation to travelling.
-Otherwise, politely inform user that you can only answer to the topics above.
+Otherwise, politely answer to user's question if it's general tourism question, otherwise politely inform that you can only respond to questions about tourism.
 Return your response in following JSON format:
-    {"category": "the category from the list, it should be all in lower case in double quotes"} if question matches category.
     {"response": "polite response to user's question"} if question doesn't match any category.
+    {"category": "the category from the list, it should be all in lower case in double quotes"} if question matches category. 
+If question matches "tour_building" then you should provide additional field in your JSON object. 
+This field is "limit" and it should have a value of int. This value represents the number of attractions that user wants to include to their tour.
+Default value for it is 10, but if user directly specifies it, you should change this value to value provided by user.
 """}
     new_message = {"role": "user", "content": f"""User input: {prompt}"""}
 
@@ -66,19 +70,33 @@ Return your response in following JSON format:
 
 def send_gpt(history, attractions_info, user_prompt):
     print(user_prompt)
-    system_message = {"role": "system", "content": f"""Act as an assistant from travelling agency in Kazakhstan.
+    system_message = {"role": "system",
+                      "content": """Act as an assistant from travelling agency in Kazakhstan.
 Your primary goal is to design tour paths for tourist that came to Kazakhstan based on their preferences.
 You will be provided with attractions info and you have to select those that suit the user-tourist the best relying on their messages.
-Also keep in mind the schedule of attractions. You will be provided with current time to do it.
-You should provide plan for tour, providing attractions in list with following parameters:
-    Concise description
-    Address and busses if there are
-    Price
-At the end apply full sum for the user.
-Contacts for all attractions management is following phone number: +7 (7172) 79-04-39.
+You should build tour path keeping in mind following variables:
+    Current time in the city
+    Current location of the tourist in city
+    Preferences of the user
+All these parameters will be provided to you in message.
+
+Finally, you should return only exact names of the attractions that you have built in the following JSON format:
+    {"attractions": ["attraction1", "attraction2", "attraction3"]}
+DO NOT RETURN ANYTHING ELSE, ONLY THE JSON SO I CAN EASILY PARSE THAT.
     """}
+    # At
+    # the
+    # end
+    # apply
+    # full
+    # sum
+    # for the user.
+    # Contacts
+    # for all attractions management is following phone number: +7(7172)
+    # 79 - 04 - 39.
     new_message = {"role": "user", "content": f"""Attractions info {attractions_info}
 Current time: {get_time_tz()}
+Current location of the user: Astana Hub, Expo territory
 User input: {user_prompt}
     """}
     messages = [system_message] + history + [new_message]
@@ -97,7 +115,14 @@ User input: {user_prompt}
                                  headers=headers,
                                  json=json_format)
         if response.status_code == 200:
-            return response.json()['choices'][0]['message']['content']
+            response_message = response.json()['choices'][0]['message']['content']
+            response_message = response_message.strip("```json\n")
+            response_message = response_message.strip("```")
+            response_message = response_message.strip()
+            try:
+                return True, json.loads(response_message)
+            except JSONDecodeError:
+                return False, response_message
         print(response.status_code)
         err = response.json()['error']['message']
     except Exception as e:
@@ -119,36 +144,51 @@ def send_embedding(prompt):
     return []
 
 
-def get_endpoint(history, category_prompt, user_prompt):
-    if history:
-        content = f"{category_prompt}. Previous messages: {history}. User's query: {user_prompt}"
-    else:
-        content = f"{category_prompt}. User's query: {user_prompt}"
+def get_summary_gpt(conn, locations, user_input):
+    placeholders = ', '.join(['%s'] * len(locations))
+    query_sql = f"SELECT name, description FROM attractions WHERE name IN ({placeholders})"
+    try:
+        cur = conn.cursor()
+        cur.execute(query_sql, tuple(locations))
+        results = cur.fetchall()
+    except Exception as e:
+        print(e)
+        return False
+    system_message = {"role": "system",
+                      "content": """Act as an assistant from travelling agency in Kazakhstan.
+Your primary goal is to design tour paths for tourist that came to Kazakhstan based on their preferences.
+You will be provided with attractions and their description.
+You should summarize the tourist paths exactly in order how attractions provided to you.
+You should provide short conclusion, how tourist is going to spend their time going to those locations.
+        """}
+    new_message = {"role": "user", "content": f"""Attractions info: {results}
+    Current time: {get_time_tz()}
+    User input: {user_input}
+"""}
+    messages = [system_message] + [new_message]
 
-    new_message = {"role": "user", "content": content}
-    messages = [get_prompt_for_endpoint()] + [new_message]
     json_format = {
-        "response_format": {"type": "json_object"},
-        "model": "gpt-3.5-turbo-1106",
+        "model": "gpt-4",
         "messages": messages,
-        "temperature": 0.0000001,
-        "max_tokens": 120,
-        "top_p": 0.1,
+        "temperature": 0.1,
+        "max_tokens": 310,
+        "top_p": 0.1,  # there is also top_k, but top_p is better for dynamic token selection.
         "seed": 42
     }
 
     try:
         response = requests.post("https://api.openai.com/v1/chat/completions",
                                  headers=headers,
-                                 json=json_format
-                                 )
+                                 json=json_format)
         if response.status_code == 200:
-            return json.loads(response.json()['choices'][0]['message']['content'])
+            response_message = response.json()['choices'][0]['message']['content']
+            return response_message
+        print(response.status_code)
         err = response.json()['error']['message']
     except Exception as e:
         err = f"Error loading json - {e}"
     print(err)
-    return {"explanation": "Sorry. Some error occurred on the server. Try to refresh the page."}
+    return False
 
 
 def get_time():
